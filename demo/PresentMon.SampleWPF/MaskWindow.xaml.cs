@@ -12,6 +12,10 @@ public partial class MaskWindow : Window
 {
     [ObservableProperty]
     private string fps = 0.ToString();
+    [ObservableProperty]
+    private string lowFps = 0.ToString();
+    [ObservableProperty]
+    private string frameTime = 0.ToString();
 
     public MaskWindow()
     {
@@ -23,7 +27,7 @@ public partial class MaskWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         nint hWnd = new WindowInteropHelper(this).Handle;
-        uint pid = FpsInspector.GetProcessIdByName("YuanShen.exe");
+        uint pid = FpsInspector.GetProcessIdByName("StarRail.exe");
         nint targetHWnd = FpsInspector.GetMainWindowHandle(pid);
 
         if (pid == 0 || targetHWnd == 0)
@@ -63,6 +67,8 @@ public partial class MaskWindow : Window
                     _ = User32.SetWindowPos(hWnd, IntPtr.Zero, 0, 0, (int)(targetRect.Width * x), (int)(targetRect.Height * x), User32.SetWindowPosFlags.SWP_SHOWWINDOW);
                 }
                 Fps = $"{result.Fps:0}";
+                LowFps = $"{result.OnePercentLowFps:0}";
+                FrameTime = $"{result.FrameTime:0}";
             });
         });
     }

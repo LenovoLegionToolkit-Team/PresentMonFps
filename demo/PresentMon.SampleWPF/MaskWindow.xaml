@@ -10,21 +10,74 @@
     Background="Transparent"
     ShowInTaskbar="False"
     WindowStyle="None"
+    Topmost="True"
     mc:Ignorable="d">
+
     <Border
-        Width="30"
-        Height="30"
+        Width="120"
+        Height="40"
         HorizontalAlignment="Left"
         VerticalAlignment="Top"
-        Background="#00000000"
+        Background="#CC1a1a1a"
         CornerRadius="4"
-        Opacity="0.5">
-        <TextBlock
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            FontFamily="{StaticResource DelugeLEDFontFamily}"
-            FontSize="16"
-            Foreground="White"
-            Text="{Binding Fps}" />
+        BorderThickness="1"
+        BorderBrush="#404040"
+        Opacity="0.95">
+
+        <Grid Margin="4,2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Vertical" HorizontalAlignment="Center">
+                <TextBlock 
+                    Text="FPS" 
+                    FontSize="8" 
+                    Foreground="#CCCCCC" 
+                    HorizontalAlignment="Center"
+                    FontWeight="SemiBold"/>
+                <TextBlock 
+                    Text="{Binding Fps, StringFormat={}{0:F0}}" 
+                    FontFamily="{StaticResource DelugeLEDFontFamily}"
+                    FontSize="14" 
+                    Foreground="#4CAF50" 
+                    HorizontalAlignment="Center"
+                    FontWeight="Bold"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Vertical" HorizontalAlignment="Center">
+                <TextBlock 
+                    Text="1% Low" 
+                    FontSize="8" 
+                    Foreground="#CCCCCC" 
+                    HorizontalAlignment="Center"
+                    FontWeight="SemiBold"/>
+                <TextBlock 
+                    Text="{Binding LowFps, StringFormat={}{0:F0}}" 
+                    FontFamily="{StaticResource DelugeLEDFontFamily}"
+                    FontSize="14" 
+                    Foreground="#FF9800" 
+                    HorizontalAlignment="Center"
+                    FontWeight="Bold"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Vertical" HorizontalAlignment="Center">
+                <TextBlock 
+                    Text="Frame Time" 
+                    FontSize="8" 
+                    Foreground="#CCCCCC" 
+                    HorizontalAlignment="Center"
+                    FontWeight="SemiBold"/>
+                <TextBlock 
+                    Text="{Binding FrameTime, StringFormat={}{0:F0}ms}" 
+                    FontFamily="{StaticResource DelugeLEDFontFamily}"
+                    FontSize="14" 
+                    Foreground="#2196F3" 
+                    HorizontalAlignment="Center"
+                    FontWeight="Bold"/>
+            </StackPanel>
+        </Grid>
     </Border>
 </Window>

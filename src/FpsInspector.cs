@@ -5,26 +5,16 @@ using PresentMonFps.Natives;
 using System;
 using System.Diagnostics;
 using System.Linq;
-using System.Numerics;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace PresentMonFps;
 
-public static class FpsInspector
+public class FpsInspector
 {
     public const string SessionName = "PresentMon-FpsInspector";
     public const string Present = "Present";
-
     public static bool IsAvailable => Environment.OSVersion.Platform == PlatformID.Win32NT;
-
-    public static void StopTraceSession()
-    {
-        AdvApi32.EVENT_TRACE_PROPERTIES properties = new();
-        properties.Wnode.BufferSize = (uint)Marshal.SizeOf<AdvApi32.EVENT_TRACE_PROPERTIES>();
-        _ = AdvApi32.ControlTrace(0, SessionName, ref properties, AdvApi32.EVENT_TRACE_CONTROL.EVENT_TRACE_CONTROL_STOP);
-    }
 
     public static uint GetProcessIdByName(string processName)
     {
@@ -81,6 +71,16 @@ public static class FpsInspector
         return await Task.Run(() => Kernel32.GetProcessIdByName(processName));
     }
 
+    public static bool IsRunAsAdmin()
+    {
+        return AdvApi32.IsRunAsAdmin();
+    }
+
+    public static bool IsRunAsAdmin(nint hWnd)
+    {
+        return AdvApi32.IsRunAsAdmin(hWnd);
+    }
+
     public static async Task<FpsResult> StartOnceAsync(FpsRequest request)
     {
         if (Environment.OSVersion.Platform != PlatformID.Win32NT)
@@ -105,6 +105,10 @@ public static class FpsInspector
             {
                 using TraceEventSession session = new(SessionName);
 
+                fps.FpsReceived += OnFpsReceived;
+                fps.OnePercentLowFpsReceived += OnOnePercentLowFpsReceived;
+                fps.FrameTimeReceived += OnFrameTimeReceived;
+
                 session.Source.Dynamic.All += OnDynamicAll;
                 session.EnableProvider(Microsoft_Windows_DxgKrnl.GUID);
 
@@ -116,13 +120,18 @@ public static class FpsInspector
                 SpinWait.SpinUntil(() =>
                 {
                     Thread.Sleep(request.PeriodMillisecond);
-                    return fps.Fps != 0d;
-                }, 5000);
+                    return fps.Fps != 0d && fps.OnePercentLowFps != 0d && fps.FrameTime != 0d;
+                }, 10000);
 
+                fps.FpsReceived -= OnFpsReceived;
+                fps.OnePercentLowFpsReceived -= OnOnePercentLowFpsReceived;
+                fps.FrameTimeReceived -= OnFrameTimeReceived;
                 session.Source.Dynamic.All -= OnDynamicAll;
                 session.Source.StopProcessing();
 
                 result.Fps = fps.Fps;
+                result.OnePercentLowFps = fps.OnePercentLowFps;
+                result.FrameTime = fps.FrameTime;
                 tcs.SetResult(result);
             });
 
@@ -135,8 +144,6 @@ public static class FpsInspector
                     return;
                 }
 
-                /// <see cref="Present"/>
-                /// <see cref="Microsoft_Windows_DxgKrnl.Name"/>
                 if (data.ProviderGuid == Microsoft_Windows_DxgKrnl.GUID)
                 {
                     if (data.ID == presentEventId)
@@ -145,6 +152,21 @@ public static class FpsInspector
                         fps.Calculate(timestamp.Ticks);
                     }
                 }
+            }
+
+            void OnFpsReceived(double fpsValue)
+            {
+                result.Fps = fpsValue;
+            }
+
+            void OnOnePercentLowFpsReceived(double onePercentLowFpsValue)
+            {
+                result.OnePercentLowFps = onePercentLowFpsValue;
+            }
+
+            void OnFrameTimeReceived(double frameTimeValue)
+            {
+                result.FrameTime = frameTimeValue;
             }
         }
         catch (Exception e)
@@ -175,6 +197,9 @@ public static class FpsInspector
             using TraceEventSession session = new(SessionName);
 
             fps.FpsReceived += OnFpsReceived;
+            fps.OnePercentLowFpsReceived += OnOnePercentLowFpsReceived;
+            fps.FrameTimeReceived += OnFrameTimeReceived;
+
             session.Source.Dynamic.All += OnDynamicAll;
             session.EnableProvider(Microsoft_Windows_DxgKrnl.GUID);
 
@@ -194,6 +219,8 @@ public static class FpsInspector
             _ = await Task.WhenAny(processTask, consumeTask);
 
             fps.FpsReceived -= OnFpsReceived;
+            fps.OnePercentLowFpsReceived -= OnOnePercentLowFpsReceived;
+            fps.FrameTimeReceived -= OnFrameTimeReceived;
             session.Source.Dynamic.All -= OnDynamicAll;
             session.Source.StopProcessing();
 
@@ -206,8 +233,6 @@ public static class FpsInspector
                     return;
                 }
 
-                /// <see cref="Present"/>
-                /// <see cref="Microsoft_Windows_DxgKrnl.Name"/>
                 if (data.ProviderGuid == Microsoft_Windows_DxgKrnl.GUID)
                 {
                     if (data.ID == presentEventId)
@@ -218,26 +243,37 @@ public static class FpsInspector
                 }
             }
 
-            void OnFpsReceived(double fps)
+            void OnFpsReceived(double fpsValue)
             {
-                result.Fps = fps;
-                callback?.Invoke(result);
+                result.Fps = fpsValue;
+                if (result.OnePercentLowFps != 0d && result.FrameTime != 0d)
+                {
+                    callback?.Invoke(result);
+                }
+            }
+
+            void OnOnePercentLowFpsReceived(double onePercentLowFpsValue)
+            {
+                result.OnePercentLowFps = onePercentLowFpsValue;
+                if (result.Fps != 0d && result.FrameTime != 0d)
+                {
+                    callback?.Invoke(result);
+                }
+            }
+
+            void OnFrameTimeReceived(double frameTimeValue)
+            {
+                result.FrameTime = frameTimeValue;
+                if (result.Fps != 0d && result.OnePercentLowFps != 0d)
+                {
+                    callback?.Invoke(result);
+                }
             }
         }
         catch (Exception e)
         {
             throw new FpsInspectorException(e.Message);
         }
-    }
-
-    public static bool IsRunAsAdmin()
-    {
-        return AdvApi32.IsRunAsAdmin();
-    }
-
-    public static bool IsRunAsAdmin(nint hWnd)
-    {
-        return AdvApi32.IsRunAsAdmin(hWnd);
     }
 }
 
@@ -252,7 +288,7 @@ public sealed class FpsRequest(uint targetPid)
 }
 
 [DebuggerDisplay("{ToString()}")]
-public sealed class FpsResult(double fps)
+public sealed class FpsResult(double fps, double onePercentLowFps, double frameTime)
 {
     /// <summary>
     /// Only used for <see cref="FpsInspector.StartForeverAsync"/>.
@@ -260,10 +296,12 @@ public sealed class FpsResult(double fps)
     public bool IsCanceled { get; set; } = false;
 
     public double Fps { get; set; } = fps;
+    public double OnePercentLowFps { get; set; } = onePercentLowFps;
+    public double FrameTime { get; set; } = frameTime;
 
-    public FpsResult() : this(default)
+    public FpsResult() : this(default, default, default)
     {
     }
 
-    public override string ToString() => $"FPS: {Fps}";
+    public override string ToString() => $"FPS: {Fps}, 1% Low: {OnePercentLowFps}, Frame Time: {FrameTime:F1}ms";
 }
