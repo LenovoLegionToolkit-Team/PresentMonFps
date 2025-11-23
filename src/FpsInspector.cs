@@ -1,10 +1,8 @@
 ﻿using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Session;
-using PresentMonFps.ETW;
 using PresentMonFps.Natives;
 using System;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -12,34 +10,31 @@ namespace PresentMonFps;
 
 public class FpsInspector
 {
-    public const string SessionName = "PresentMon-FpsInspector";
-    public const string Present = "Present";
+    private static readonly Guid DxgKrnlGuid = new("802ec45a-1e99-4b83-9920-87c98277ba9d");
+    private const int PresentEventId = 0x00b8;
+
     public static bool IsAvailable => Environment.OSVersion.Platform == PlatformID.Win32NT;
 
     public static uint GetProcessIdByName(string processName)
     {
-        return Kernel32.GetProcessIdByName(processName);
+        Process[] processes = Process.GetProcessesByName(processName);
+        return processes.Length > 0 ? (uint)processes[0].Id : 0;
     }
 
     public static nint GetMainWindowHandle(uint processId)
     {
         nint mainWindowHandle = IntPtr.Zero;
-
-        Process? p = Process.GetProcesses().Where(p => p.Id == processId).FirstOrDefault();
-
-        if (p != null)
+        User32.EnumWindows((hWnd, lParam) =>
         {
-            _ = User32.EnumWindows((hWnd, lParam) =>
+            User32.GetWindowThreadProcessId(hWnd, out uint windowProcessId);
+            if (windowProcessId == processId && User32.IsWindowVisible(hWnd))
             {
-                _ = User32.GetWindowThreadProcessId(hWnd, out uint windowProcessId);
-                if (windowProcessId == processId && User32.IsWindowVisible(hWnd))
-                {
-                    mainWindowHandle = hWnd;
-                    return false;
-                }
-                return true;
-            }, IntPtr.Zero);
-        }
+                mainWindowHandle = hWnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+
         return mainWindowHandle;
     }
 
@@ -47,227 +42,143 @@ public class FpsInspector
     {
         try
         {
-            nint processHandle = IntPtr.Zero;
-
-            Process? p = Process.GetProcesses().Where(p => p.Id == processId).FirstOrDefault();
-
-            if (p != null)
-            {
-                return p.Handle;
-            }
-
-            return processHandle;
+            using Process p = Process.GetProcessById((int)processId);
+            return p.Handle;
         }
-        catch (Exception e)
+        catch
         {
-            _ = e.Message;
+            return IntPtr.Zero;
         }
-
-        return IntPtr.Zero;
     }
 
-    public static async Task<uint> GetProcessIdByNameAsync(string processName)
+    public static Task<uint> GetProcessIdByNameAsync(string processName)
     {
-        return await Task.Run(() => Kernel32.GetProcessIdByName(processName));
+        return Task.Run(() => GetProcessIdByName(processName));
     }
 
-    public static bool IsRunAsAdmin()
-    {
-        return AdvApi32.IsRunAsAdmin();
-    }
+    public static bool IsRunAsAdmin() => AdvApi32.IsRunAsAdmin();
 
-    public static bool IsRunAsAdmin(nint hWnd)
-    {
-        return AdvApi32.IsRunAsAdmin(hWnd);
-    }
+    public static bool IsRunAsAdmin(nint hWnd) => AdvApi32.IsRunAsAdmin(hWnd);
 
     public static async Task<FpsResult> StartOnceAsync(FpsRequest request)
     {
-        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
-        {
-            throw new FpsInspectorException($"For now only Windows is supported, detected platform is {Environment.OSVersion.Platform}.");
-        }
+        if (!IsAvailable) throw new PlatformNotSupportedException("Windows only.");
+        if (request.TargetPid == 0) throw new ArgumentException("Invalid TargetPid.");
 
-        if (request.TargetPid == 0)
-        {
-            throw new FpsInspectorException($"Target Pid {nameof(FpsRequest.TargetPid)} is not supported.");
-        }
+        TaskCompletionSource<FpsResult> tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        FpsResult result = new();
+        FpsCalculator fps = new();
+        int pid = (int)request.TargetPid;
+        string sessionName = $"PresentMon-FpsInspector-{Guid.NewGuid()}";
 
-        try
-        {
-            TaskCompletionSource<FpsResult> tcs = new();
-            FpsResult result = new();
-            FpsCalculator fps = new();
-            int pid = (int)request.TargetPid;
-            TraceEventID presentEventId = (TraceEventID)Microsoft_Windows_DxgKrnl.Present_Info.Id;
+        using CancellationTokenSource cts = new(request.PeriodMillisecond * 2 + 5000);
+        using var reg = cts.Token.Register(() => tcs.TrySetCanceled());
 
-            await Task.Run(() =>
+        _ = Task.Factory.StartNew(() =>
+        {
+            try
             {
-                using TraceEventSession session = new(SessionName);
+                using TraceEventSession session = new(sessionName);
 
-                fps.FpsReceived += OnFpsReceived;
-                fps.OnePercentLowFpsReceived += OnOnePercentLowFpsReceived;
-                fps.FrameTimeReceived += OnFrameTimeReceived;
+                object lockObj = new();
+                bool completed = false;
 
-                session.Source.Dynamic.All += OnDynamicAll;
-                session.EnableProvider(Microsoft_Windows_DxgKrnl.GUID);
-
-                _ = Task.Run(() =>
+                void CheckCompletion()
                 {
-                    session.Source.Process();
-                });
-
-                SpinWait.SpinUntil(() =>
-                {
-                    Thread.Sleep(request.PeriodMillisecond);
-                    return fps.Fps != 0d && fps.OnePercentLowFps != 0d && fps.FrameTime != 0d;
-                }, 10000);
-
-                fps.FpsReceived -= OnFpsReceived;
-                fps.OnePercentLowFpsReceived -= OnOnePercentLowFpsReceived;
-                fps.FrameTimeReceived -= OnFrameTimeReceived;
-                session.Source.Dynamic.All -= OnDynamicAll;
-                session.Source.StopProcessing();
-
-                result.Fps = fps.Fps;
-                result.OnePercentLowFps = fps.OnePercentLowFps;
-                result.FrameTime = fps.FrameTime;
-                tcs.SetResult(result);
-            });
-
-            return await tcs.Task;
-
-            void OnDynamicAll(TraceEvent data)
-            {
-                if (data.ProcessID != pid)
-                {
-                    return;
-                }
-
-                if (data.ProviderGuid == Microsoft_Windows_DxgKrnl.GUID)
-                {
-                    if (data.ID == presentEventId)
+                    lock (lockObj)
                     {
-                        DateTime timestamp = data.TimeStamp;
-                        fps.Calculate(timestamp.Ticks);
+                        if (completed) return;
+                        if (result.Fps > 0 && result.OnePercentLowFps > 0 && result.FrameTime > 0)
+                        {
+                            completed = true;
+                            session.Source.StopProcessing();
+                            tcs.TrySetResult(result);
+                        }
                     }
                 }
-            }
 
-            void OnFpsReceived(double fpsValue)
-            {
-                result.Fps = fpsValue;
-            }
+                fps.FpsReceived += (v) => { result.Fps = v; CheckCompletion(); };
+                fps.OnePercentLowFpsReceived += (v) => { result.OnePercentLowFps = v; CheckCompletion(); };
+                fps.FrameTimeReceived += (v) => { result.FrameTime = v; CheckCompletion(); };
 
-            void OnOnePercentLowFpsReceived(double onePercentLowFpsValue)
-            {
-                result.OnePercentLowFps = onePercentLowFpsValue;
-            }
+                session.Source.AllEvents += (data) =>
+                {
+                    if (data.ProviderGuid == DxgKrnlGuid &&
+                        (int)data.ID == PresentEventId &&
+                        data.ProcessID == pid)
+                    {
+                        fps.Calculate(data.TimeStamp.Ticks);
+                    }
+                };
 
-            void OnFrameTimeReceived(double frameTimeValue)
-            {
-                result.FrameTime = frameTimeValue;
+                session.EnableProvider(DxgKrnlGuid, TraceEventLevel.Informational, 0x1);
+                session.Source.Process();
             }
-        }
-        catch (Exception e)
-        {
-            throw new FpsInspectorException(e.Message);
-        }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(new FpsInspectorException(ex.Message));
+            }
+        }, TaskCreationOptions.LongRunning);
+
+        return await tcs.Task.ConfigureAwait(false);
     }
 
     public static async Task StartForeverAsync(FpsRequest request, Action<FpsResult>? callback = null, CancellationToken? token = null)
     {
-        if (Environment.OSVersion.Platform != PlatformID.Win32NT)
-        {
-            throw new FpsInspectorException($"For now only Windows is supported, detected platform is {Environment.OSVersion.Platform}.");
-        }
+        if (!IsAvailable) throw new PlatformNotSupportedException("Windows only.");
+        if (request.TargetPid == 0) throw new ArgumentException("Invalid TargetPid.");
 
-        if (request.TargetPid == 0)
-        {
-            throw new FpsInspectorException($"Target Pid {nameof(FpsRequest.TargetPid)} is not supported.");
-        }
+        string sessionName = $"PresentMon-FpsInspector-{Guid.NewGuid()}";
+        int pid = (int)request.TargetPid;
+        FpsResult result = new();
+        FpsCalculator fps = new();
+        CancellationToken ct = token ?? CancellationToken.None;
 
         try
         {
-            FpsResult result = new();
-            FpsCalculator fps = new();
-            int pid = (int)request.TargetPid;
-            TraceEventID presentEventId = (TraceEventID)Microsoft_Windows_DxgKrnl.Present_Info.Id;
+            using TraceEventSession session = new(sessionName);
 
-            using TraceEventSession session = new(SessionName);
-
-            fps.FpsReceived += OnFpsReceived;
-            fps.OnePercentLowFpsReceived += OnOnePercentLowFpsReceived;
-            fps.FrameTimeReceived += OnFrameTimeReceived;
-
-            session.Source.Dynamic.All += OnDynamicAll;
-            session.EnableProvider(Microsoft_Windows_DxgKrnl.GUID);
-
-            Task processTask = Task.Factory.StartNew(session.Source.Process, TaskCreationOptions.LongRunning);
-            Task consumeTask = Task.Run(() =>
+            void TryCallback()
             {
-                while (!(token?.IsCancellationRequested ?? false))
-                {
-                    Thread.Sleep(request.PeriodMillisecond);
-                    if (result.IsCanceled)
-                    {
-                        break;
-                    }
-                }
-            });
-
-            _ = await Task.WhenAny(processTask, consumeTask);
-
-            fps.FpsReceived -= OnFpsReceived;
-            fps.OnePercentLowFpsReceived -= OnOnePercentLowFpsReceived;
-            fps.FrameTimeReceived -= OnFrameTimeReceived;
-            session.Source.Dynamic.All -= OnDynamicAll;
-            session.Source.StopProcessing();
-
-            return;
-
-            void OnDynamicAll(TraceEvent data)
-            {
-                if (data.ProcessID != pid)
-                {
-                    return;
-                }
-
-                if (data.ProviderGuid == Microsoft_Windows_DxgKrnl.GUID)
-                {
-                    if (data.ID == presentEventId)
-                    {
-                        DateTime timestamp = data.TimeStamp;
-                        fps.Calculate(timestamp.Ticks);
-                    }
-                }
-            }
-
-            void OnFpsReceived(double fpsValue)
-            {
-                result.Fps = fpsValue;
-                if (result.OnePercentLowFps != 0d && result.FrameTime != 0d)
+                if (result.Fps > 0 && result.FrameTime > 0 && result.OnePercentLowFps > 0)
                 {
                     callback?.Invoke(result);
                 }
             }
 
-            void OnOnePercentLowFpsReceived(double onePercentLowFpsValue)
+            fps.FpsReceived += (v) => { result.Fps = v; TryCallback(); };
+            fps.OnePercentLowFpsReceived += (v) => { result.OnePercentLowFps = v; TryCallback(); };
+            fps.FrameTimeReceived += (v) => { result.FrameTime = v; TryCallback(); };
+
+            session.Source.AllEvents += (data) =>
             {
-                result.OnePercentLowFps = onePercentLowFpsValue;
-                if (result.Fps != 0d && result.FrameTime != 0d)
+                if (data.ProviderGuid == DxgKrnlGuid &&
+                    (int)data.ID == PresentEventId &&
+                    data.ProcessID == pid)
                 {
-                    callback?.Invoke(result);
+                    fps.Calculate(data.TimeStamp.Ticks);
+                }
+            };
+
+            session.EnableProvider(DxgKrnlGuid, TraceEventLevel.Informational, 0x1);
+
+            Task processingTask = Task.Factory.StartNew(() =>
+            {
+                session.Source.Process();
+            }, TaskCreationOptions.LongRunning);
+
+            try
+            {
+                while (!ct.IsCancellationRequested && !result.IsCanceled)
+                {
+                    await Task.Delay(request.PeriodMillisecond, ct).ConfigureAwait(false);
                 }
             }
-
-            void OnFrameTimeReceived(double frameTimeValue)
+            catch (TaskCanceledException) { }
+            finally
             {
-                result.FrameTime = frameTimeValue;
-                if (result.Fps != 0d && result.OnePercentLowFps != 0d)
-                {
-                    callback?.Invoke(result);
-                }
+                session.Source.StopProcessing();
+                await Task.WhenAny(processingTask, Task.Delay(1000)).ConfigureAwait(false);
             }
         }
         catch (Exception e)
@@ -277,31 +188,35 @@ public class FpsInspector
     }
 }
 
-public sealed class FpsRequest(uint targetPid)
+public sealed class FpsRequest
 {
-    public uint TargetPid { get; set; } = targetPid;
+    public uint TargetPid { get; set; }
     public int PeriodMillisecond { get; set; } = 100;
 
-    public FpsRequest() : this(default)
+    public FpsRequest(uint targetPid)
     {
+        TargetPid = targetPid;
     }
+
+    public FpsRequest() { }
 }
 
 [DebuggerDisplay("{ToString()}")]
-public sealed class FpsResult(double fps, double onePercentLowFps, double frameTime)
+public sealed class FpsResult
 {
-    /// <summary>
-    /// Only used for <see cref="FpsInspector.StartForeverAsync"/>.
-    /// </summary>
-    public bool IsCanceled { get; set; } = false;
+    public bool IsCanceled { get; set; }
+    public double Fps { get; set; }
+    public double OnePercentLowFps { get; set; }
+    public double FrameTime { get; set; }
 
-    public double Fps { get; set; } = fps;
-    public double OnePercentLowFps { get; set; } = onePercentLowFps;
-    public double FrameTime { get; set; } = frameTime;
-
-    public FpsResult() : this(default, default, default)
+    public FpsResult(double fps, double onePercentLowFps, double frameTime)
     {
+        Fps = fps;
+        OnePercentLowFps = onePercentLowFps;
+        FrameTime = frameTime;
     }
+
+    public FpsResult() { }
 
     public override string ToString() => $"FPS: {Fps}, 1% Low: {OnePercentLowFps}, Frame Time: {FrameTime:F1}ms";
 }
