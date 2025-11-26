@@ -2,7 +2,10 @@
 using Microsoft.Diagnostics.Tracing.Session;
 using PresentMonFps.Natives;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,9 +14,54 @@ namespace PresentMonFps;
 public class FpsInspector
 {
     private static readonly Guid DxgKrnlGuid = new("802ec45a-1e99-4b83-9920-87c98277ba9d");
+    private static readonly List<TraceEventSession> Sessions = new();
     private const int PresentEventId = 0x00b8;
 
     public static bool IsAvailable => Environment.OSVersion.Platform == PlatformID.Win32NT;
+
+    static FpsInspector()
+    {
+        CleanupOrphanedSessions();
+    }
+
+    private static void CleanupOrphanedSessions()
+    {
+        try
+        {
+            var sessionNames = TraceEventSession.GetActiveSessionNames();
+            foreach (var name in sessionNames)
+            {
+                if (name.StartsWith("PresentMon-FpsInspector-"))
+                {
+                    bool isInSessions = false;
+                    lock (Sessions)
+                    {
+                        isInSessions = Sessions.Any(s => s.SessionName == name);
+                    }
+
+                    if (isInSessions)
+                    {
+                        continue;
+                    }
+
+                    var properties = new AdvApi32.EVENT_TRACE_PROPERTIES
+                    {
+                        Wnode = new AdvApi32.WNODE_HEADER
+                        {
+                            BufferSize = (uint)Marshal.SizeOf<AdvApi32.EVENT_TRACE_PROPERTIES>(),
+                            Guid = Guid.Empty,
+                            Flags = 0x20000
+                        },
+                        LoggerNameOffset = (uint)Marshal.SizeOf<AdvApi32.EVENT_TRACE_PROPERTIES>(),
+                        LogFileNameOffset = 0
+                    };
+
+                    AdvApi32.ControlTrace(0, name, ref properties, AdvApi32.EVENT_TRACE_CONTROL.EVENT_TRACE_CONTROL_STOP);
+                }
+            }
+        }
+        catch { /* Ignore */ }
+    }
 
     public static uint GetProcessIdByName(string processName)
     {
@@ -27,12 +75,12 @@ public class FpsInspector
         User32.EnumWindows((hWnd, lParam) =>
         {
             User32.GetWindowThreadProcessId(hWnd, out uint windowProcessId);
-            if (windowProcessId == processId && User32.IsWindowVisible(hWnd))
+            if (windowProcessId != processId || !User32.IsWindowVisible(hWnd))
             {
-                mainWindowHandle = hWnd;
-                return false;
+                return true;
             }
-            return true;
+            mainWindowHandle = hWnd;
+            return false;
         }, IntPtr.Zero);
 
         return mainWindowHandle;
@@ -62,6 +110,8 @@ public class FpsInspector
 
     public static async Task<FpsResult> StartOnceAsync(FpsRequest request)
     {
+        CleanupOrphanedSessions();
+
         if (!IsAvailable) throw new PlatformNotSupportedException("Windows only.");
         if (request.TargetPid == 0) throw new ArgumentException("Invalid TargetPid.");
 
@@ -72,13 +122,17 @@ public class FpsInspector
         string sessionName = $"PresentMon-FpsInspector-{Guid.NewGuid()}";
 
         using CancellationTokenSource cts = new(request.PeriodMillisecond * 2 + 5000);
-        using var reg = cts.Token.Register(() => tcs.TrySetCanceled());
+        await using var reg = cts.Token.Register(() => tcs.TrySetCanceled());
 
         _ = Task.Factory.StartNew(() =>
         {
             try
             {
                 using TraceEventSession session = new(sessionName);
+                lock (Sessions)
+                {
+                    Sessions.Add(session);
+                }
 
                 object lockObj = new();
                 bool completed = false;
@@ -88,12 +142,13 @@ public class FpsInspector
                     lock (lockObj)
                     {
                         if (completed) return;
-                        if (result.Fps > 0 && result.OnePercentLowFps > 0 && result.FrameTime > 0)
+                        if (!(result.Fps > 0) || !(result.OnePercentLowFps > 0) || !(result.FrameTime > 0))
                         {
-                            completed = true;
-                            session.Source.StopProcessing();
-                            tcs.TrySetResult(result);
+                            return;
                         }
+                        completed = true;
+                        session.Source.StopProcessing();
+                        tcs.TrySetResult(result);
                     }
                 }
 
@@ -118,6 +173,13 @@ public class FpsInspector
             {
                 tcs.TrySetException(new FpsInspectorException(ex.Message));
             }
+            finally
+            {
+                lock (Sessions)
+                {
+                    Sessions.RemoveAll(s => s.SessionName == sessionName);
+                }
+            }
         }, TaskCreationOptions.LongRunning);
 
         return await tcs.Task.ConfigureAwait(false);
@@ -125,6 +187,8 @@ public class FpsInspector
 
     public static async Task StartForeverAsync(FpsRequest request, Action<FpsResult>? callback = null, CancellationToken? token = null)
     {
+        CleanupOrphanedSessions();
+
         if (!IsAvailable) throw new PlatformNotSupportedException("Windows only.");
         if (request.TargetPid == 0) throw new ArgumentException("Invalid TargetPid.");
 
@@ -133,14 +197,18 @@ public class FpsInspector
         FpsResult result = new();
         FpsCalculator fps = new();
         CancellationToken ct = token ?? CancellationToken.None;
+        TraceEventSession session = new(sessionName);
+
+        lock (Sessions)
+        {
+            Sessions.Add(session);
+        }
 
         try
         {
-            using TraceEventSession session = new(sessionName);
-
             void TryCallback()
             {
-                if (result.Fps > 0 && result.FrameTime > 0 && result.OnePercentLowFps > 0)
+                if (result is { Fps: > 0, FrameTime: > 0, OnePercentLowFps: > 0 })
                 {
                     callback?.Invoke(result);
                 }
@@ -178,12 +246,43 @@ public class FpsInspector
             finally
             {
                 session.Source.StopProcessing();
-                await Task.WhenAny(processingTask, Task.Delay(1000)).ConfigureAwait(false);
+                await Task.WhenAny(processingTask, Task.Delay(1000, ct)).ConfigureAwait(false);
             }
         }
         catch (Exception e)
         {
             throw new FpsInspectorException(e.Message);
+        }
+        finally
+        {
+            session.Source.StopProcessing();
+            session.Dispose();
+            lock (Sessions)
+            {
+                Sessions.Remove(session);
+            }
+        }
+    }
+
+    public static void ClearAllSessions()
+    {
+        lock (Sessions)
+        {
+            if (!Sessions.Any())
+            {
+                return;
+            }
+
+            foreach (var traceEvent in Sessions)
+            {
+                try
+                {
+                    traceEvent.Stop();
+                    traceEvent.Dispose();
+                }
+                catch { /* Ignore */ }
+            }
+            Sessions.Clear();
         }
     }
 }
