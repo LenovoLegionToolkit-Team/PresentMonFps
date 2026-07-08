@@ -1,4 +1,4 @@
-name: Build
+name: Build and Prerelease
 
 on:
   push:
@@ -8,8 +8,11 @@ on:
 
 jobs:
   build:
-    name: Verify Build
+    name: Build & Prerelease
     runs-on: windows-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -19,8 +22,58 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
+      - name: Determine Version
+        id: get_version
+        run: |
+          $githubVersionStr = ""
+          try {
+            $env:GH_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
+            $githubVersionStr = gh release view --json tagName --template '{{.tagName}}' 2>$null
+            if ($githubVersionStr -match '^v?(\d+\.\d+\.\d+.*)$') {
+              $githubVersionStr = $Matches[1]
+            }
+          } catch {
+            # No release found or command failed
+          }
+
+          $csprojPath = "src/PresentMonFps.csproj"
+          [xml]$xml = Get-Content $csprojPath
+          $csprojVersionStr = $xml.Project.PropertyGroup.Version
+          if (!$csprojVersionStr) {
+            $csprojVersionStr = "1.0.0"
+          }
+
+          $githubVersion = $null
+          if ($githubVersionStr) {
+            $githubVersion = [version]$githubVersionStr
+          }
+          $csprojVersion = [version]$csprojVersionStr
+
+          $baseVersion = $csprojVersion
+          if ($githubVersion -and $githubVersion -ge $csprojVersion) {
+            $baseVersion = [version]::new($githubVersion.Major, $githubVersion.Minor, ($githubVersion.Build + 1))
+          }
+
+          $finalVersion = "$($baseVersion.ToString(3))-pre${{ github.run_number }}"
+          echo "version=$finalVersion" >> $env:GITHUB_OUTPUT
+        shell: powershell
+
       - name: Restore Dependencies
         run: dotnet restore src/PresentMonFps.csproj
 
       - name: Build
-        run: dotnet build src/PresentMonFps.csproj -c Release
+        run: dotnet build src/PresentMonFps.csproj -c Release /p:Version=${{ steps.get_version.outputs.version }}
+
+      - name: Pack
+        run: dotnet pack src/PresentMonFps.csproj -c Release /p:Version=${{ steps.get_version.outputs.version }} -o Release
+
+      - name: NuGet login
+        if: github.event_name == 'push' && github.ref == 'refs/heads/v2'
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: LenovoLegionToolkit-Team
+
+      - name: Push to NuGet.org
+        if: github.event_name == 'push' && github.ref == 'refs/heads/v2'
+        run: dotnet nuget push Release\*.nupkg --source https://api.nuget.org/v3/index.json --skip-duplicate --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
