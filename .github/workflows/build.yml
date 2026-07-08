@@ -65,6 +65,7 @@ jobs:
 
           $finalVersion = "$($baseVersion.ToString(3))-pre${{ github.run_number }}"
           echo "version=$finalVersion" >> $env:GITHUB_OUTPUT
+          $global:LASTEXITCODE = 0
         shell: powershell
 
       - name: Restore Dependencies
