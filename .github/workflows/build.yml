@@ -31,9 +31,6 @@ jobs:
             $rawTag = gh release view --json tagName --template '{{.tagName}}' 2>$null
             if ($rawTag) {
               $githubVersionStr = ([string]$rawTag).Trim()
-              if ($githubVersionStr -match '^v?(\d+\.\d+\.\d+.*)$') {
-                $githubVersionStr = $Matches[1]
-              }
             }
           } catch {
             # No release found or command failed
@@ -48,15 +45,18 @@ jobs:
               break
             }
           }
-          if (!$csprojVersionStr) {
-            $csprojVersionStr = "1.0.0"
-          }
 
           $githubVersion = $null
-          if ($githubVersionStr) {
-            $githubVersion = [version]$githubVersionStr
+          if ($githubVersionStr -and $githubVersionStr -match '(\d+\.\d+\.\d+)') {
+            $githubVersion = [version]$Matches[1]
           }
-          $csprojVersion = [version]$csprojVersionStr
+
+          $csprojVersion = $null
+          if ($csprojVersionStr -and $csprojVersionStr -match '(\d+\.\d+\.\d+)') {
+            $csprojVersion = [version]$Matches[1]
+          } else {
+            $csprojVersion = [version]"1.0.0"
+          }
 
           $baseVersion = $csprojVersion
           if ($githubVersion -and $githubVersion -ge $csprojVersion) {
