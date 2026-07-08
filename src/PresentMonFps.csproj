@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Library</OutputType>
@@ -10,13 +10,14 @@
 		<Version>$(VersionPrefix)2.0.7</Version>
 		<LangVersion>12.0</LangVersion>
 		<Nullable>enable</Nullable>
-		<Authors>Lemutec</Authors>
+		<Authors>Lemutec, LenovoLegionToolkit-Team</Authors>
 		<Company>Lemutec</Company>
 		<Title>PresentMonFps</Title>
+		<PackageId>LLT.PresentMonFps</PackageId>
 		<Description>The PresentMon .NET Wrapper for calculating FPS.</Description>
-		<PackageProjectUrl>https://github.com/lemutec/PresentMonFps</PackageProjectUrl>
+		<PackageProjectUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
-		<RepositoryUrl>https://github.com/lemutec/PresentMonFps</RepositoryUrl>
+		<RepositoryUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<PackageTags>PresentMon</PackageTags>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>

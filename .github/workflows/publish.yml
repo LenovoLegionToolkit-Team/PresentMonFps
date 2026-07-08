@@ -1,0 +1,55 @@
+name: Publish NuGet Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    name: Build, Pack, and Publish
+    runs-on: windows-latest
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore src/PresentMonFps.csproj
+
+      - name: Extract version
+        id: get_version
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+        shell: powershell
+
+      - name: Build
+        run: dotnet build src/PresentMonFps.csproj -c Release /p:Version=${{ steps.get_version.outputs.version }}
+
+      - name: Pack
+        run: dotnet pack src/PresentMonFps.csproj -c Release /p:Version=${{ steps.get_version.outputs.version }} -o Release
+
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: LenovoLegionToolkit-Team
+
+      - name: Push to NuGet.org
+        run: dotnet nuget push Release\*.nupkg --source https://api.nuget.org/v3/index.json --skip-duplicate --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Release\*.nupkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
