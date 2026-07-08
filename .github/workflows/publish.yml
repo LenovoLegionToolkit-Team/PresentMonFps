@@ -42,7 +42,7 @@ jobs:
         uses: NuGet/login@v1
         id: login
         with:
-          user: LenovoLegionToolkit-Team
+          user: Metanome
 
       - name: Push to NuGet.org
         run: dotnet nuget push Release\*.nupkg --source https://api.nuget.org/v3/index.json --skip-duplicate --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
