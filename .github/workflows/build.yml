@@ -28,9 +28,12 @@ jobs:
           $githubVersionStr = ""
           try {
             $env:GH_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-            $githubVersionStr = gh release view --json tagName --template '{{.tagName}}' 2>$null
-            if ($githubVersionStr -match '^v?(\d+\.\d+\.\d+.*)$') {
-              $githubVersionStr = $Matches[1]
+            $rawTag = gh release view --json tagName --template '{{.tagName}}' 2>$null
+            if ($rawTag) {
+              $githubVersionStr = ([string]$rawTag).Trim()
+              if ($githubVersionStr -match '^v?(\d+\.\d+\.\d+.*)$') {
+                $githubVersionStr = $Matches[1]
+              }
             }
           } catch {
             # No release found or command failed
@@ -38,7 +41,13 @@ jobs:
 
           $csprojPath = "src/PresentMonFps.csproj"
           [xml]$xml = Get-Content $csprojPath
-          $csprojVersionStr = $xml.Project.PropertyGroup.Version
+          $csprojVersionStr = ""
+          foreach ($pg in $xml.Project.PropertyGroup) {
+            if ($pg.Version) {
+              $csprojVersionStr = $pg.Version
+              break
+            }
+          }
           if (!$csprojVersionStr) {
             $csprojVersionStr = "1.0.0"
           }
