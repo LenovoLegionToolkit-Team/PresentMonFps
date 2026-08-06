@@ -4,18 +4,9 @@
 		<OutputType>Library</OutputType>
 		<TargetFramework>net9.0</TargetFramework>
 		<AssemblyName>PresentMonFps</AssemblyName>
-		<Version>$(VersionPrefix)2.0.7</Version>
-		<LangVersion>12.0</LangVersion>
-		<Nullable>enable</Nullable>
-		<Authors>Lemutec, LenovoLegionToolkit-Team</Authors>
-		<Company>Lemutec</Company>
 		<Title>PresentMonFps</Title>
 		<PackageId>LLT.PresentMonFps</PackageId>
 		<Description>The PresentMon .NET Wrapper for calculating FPS.</Description>
-		<PackageProjectUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</PackageProjectUrl>
-		<PackageReadmeFile>README.md</PackageReadmeFile>
-		<RepositoryUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</RepositoryUrl>
-		<RepositoryType>git</RepositoryType>
 		<PackageTags>PresentMon</PackageTags>
 		<PackageLicenseFile>LICENSE</PackageLicenseFile>
 		<PackageIcon>Favicon.png</PackageIcon>

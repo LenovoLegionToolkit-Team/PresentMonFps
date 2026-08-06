@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <!-- Base version components: update these when bumping the version -->
+    <VersionMajor>2</VersionMajor>
+    <VersionMinor>0</VersionMinor>
+    <VersionBase>$(VersionMajor).$(VersionMinor)</VersionBase>
+    <Authors>LenovoLegionToolkit-Team</Authors>
+    <Copyright>Copyright © 2026</Copyright>
+    <RepositoryUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/LenovoLegionToolkit-Team/PresentMonFps</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <!-- Prevent SourceLink from appending a second commit SHA to InformationalVersion -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>
