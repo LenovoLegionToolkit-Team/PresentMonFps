@@ -32,9 +32,7 @@ jobs:
             if ($rawTag) {
               $githubVersionStr = ([string]$rawTag).Trim()
             }
-          } catch {
-            # No release found or command failed
-          }
+          } catch {}
 
           $csprojPath = "src/PresentMonFps.csproj"
           [xml]$xml = Get-Content $csprojPath
