@@ -34,12 +34,12 @@ jobs:
             }
           } catch {}
 
-          $csprojPath = "src/PresentMonFps.csproj"
-          [xml]$xml = Get-Content $csprojPath
+          $propsPath = "Directory.Build.props"
+          [xml]$xml = Get-Content $propsPath
           $csprojVersionStr = ""
           foreach ($pg in $xml.Project.PropertyGroup) {
-            if ($pg.Version) {
-              $csprojVersionStr = $pg.Version
+            if ($pg.VersionMajor -and $pg.VersionMinor) {
+              $csprojVersionStr = "$($pg.VersionMajor).$($pg.VersionMinor).0"
               break
             }
           }
