@@ -61,7 +61,7 @@ jobs:
             $baseVersion = [version]::new($githubVersion.Major, $githubVersion.Minor, ($githubVersion.Build + 1))
           }
 
-          $finalVersion = "$($baseVersion.ToString(3))-pre${{ github.run_number }}"
+          $finalVersion = "$($baseVersion.ToString(3))-pre.${{ github.run_number }}"
           echo "version=$finalVersion" >> $env:GITHUB_OUTPUT
           $global:LASTEXITCODE = 0
         shell: powershell
