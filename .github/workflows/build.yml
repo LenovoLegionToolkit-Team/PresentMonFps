@@ -25,44 +25,39 @@ jobs:
       - name: Determine Version
         id: get_version
         run: |
-          $githubVersionStr = ""
+          $packageId = "LLT.PresentMonFps"
+          $csprojVersion = [version]"1.0.0"
+          if (Test-Path "Directory.Build.props") {
+            [xml]$xml = Get-Content "Directory.Build.props"
+            foreach ($pg in $xml.Project.PropertyGroup) {
+              if ($pg.PackageId) { $packageId = [string]$pg.PackageId }
+              if ($pg.VersionMajor -and $pg.VersionMinor) {
+                $csprojVersion = [version]"$($pg.VersionMajor).$($pg.VersionMinor).0"
+              }
+            }
+          }
+
+          $nugetHighest = $null
           try {
-            $env:GH_TOKEN = "${{ secrets.GITHUB_TOKEN }}"
-            $rawTag = gh release view --json tagName --template '{{.tagName}}' 2>$null
-            if ($rawTag) {
-              $githubVersionStr = ([string]$rawTag).Trim()
+            $resp = Invoke-RestMethod -Uri "https://api.nuget.org/v3-flatcontainer/$($packageId.ToLower())/index.json" -TimeoutSec 5
+            foreach ($v in $resp.versions) {
+              if ($v -match '^(\d+\.\d+\.\d+)') {
+                $parsed = [version]$Matches[1]
+                if ($nugetHighest -eq $null -or $parsed -gt $nugetHighest) {
+                  $nugetHighest = $parsed
+                }
+              }
             }
           } catch {}
 
-          $propsPath = "Directory.Build.props"
-          [xml]$xml = Get-Content $propsPath
-          $csprojVersionStr = ""
-          foreach ($pg in $xml.Project.PropertyGroup) {
-            if ($pg.VersionMajor -and $pg.VersionMinor) {
-              $csprojVersionStr = "$($pg.VersionMajor).$($pg.VersionMinor).0"
-              break
-            }
+          $highestKnown = $csprojVersion
+          if ($nugetHighest -and $nugetHighest -ge $highestKnown) {
+            $highestKnown = [version]::new($nugetHighest.Major, $nugetHighest.Minor, ($nugetHighest.Build + 1))
           }
 
-          $githubVersion = $null
-          if ($githubVersionStr -and $githubVersionStr -match '(\d+\.\d+\.\d+)') {
-            $githubVersion = [version]$Matches[1]
-          }
-
-          $csprojVersion = $null
-          if ($csprojVersionStr -and $csprojVersionStr -match '(\d+\.\d+\.\d+)') {
-            $csprojVersion = [version]$Matches[1]
-          } else {
-            $csprojVersion = [version]"1.0.0"
-          }
-
-          $baseVersion = $csprojVersion
-          if ($githubVersion -and $githubVersion -ge $csprojVersion) {
-            $baseVersion = [version]::new($githubVersion.Major, $githubVersion.Minor, ($githubVersion.Build + 1))
-          }
-
-          $finalVersion = "$($baseVersion.ToString(3))-pre.${{ github.run_number }}"
-          echo "version=$finalVersion" >> $env:GITHUB_OUTPUT
+          $finalVersion = "$($highestKnown.ToString(3))-pre.${{ github.run_number }}"
+          "version=$finalVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Resolved package version: $finalVersion"
           $global:LASTEXITCODE = 0
         shell: powershell
 
